@@ -18,7 +18,10 @@ use super::{
     storage::StorageExt,
 };
 
-use libconsensus::{Block, BlockId, Error, PeerId, Service};
+use libconsensus::{errors, PeerId};
+use libtransport::Transport;
+
+use super::{Block, BlockId};
 
 enum LeaderState {
     Building(Instant),
@@ -42,7 +45,7 @@ pub enum ReadyStatus {
 pub struct FantomRaftNode<S: StorageExt> {
     peer_id: PeerId,
     raw_node: RawNode<S>,
-    service: Box<dyn Service>,
+    transport: Box<dyn Transport<RaftMessage, PeerId>>,
     leader_state: Option<LeaderState>,
     follower_state: Option<FollowerState>,
     block_queue: BlockQueue,
@@ -54,14 +57,14 @@ impl<S: StorageExt> FantomRaftNode<S> {
     pub fn new(
         peer_id: PeerId,
         raw_node: RawNode<S>,
-        service: Box<dyn Service>,
+        transport: Box<dyn Transport>,
         peers: Vec<PeerId>,
         period: Duration,
     ) -> Self {
         FantomRaftNode {
             peer_id,
             raw_node,
-            service,
+            transport,
             leader_state: None,
             follower_state: Some(FollowerState::Idle),
             block_queue: BlockQueue::new(),
@@ -88,7 +91,7 @@ impl<S: StorageExt> FantomRaftNode<S> {
         debug!("Block has been received: {:?}", &block);
         self.block_queue.block_new(block.clone());
 
-        self.service
+        self.raft_transport
             .check_blocks(vec![block.block_id])
             .expect("Failed to send check blocks");
     }
@@ -136,7 +139,7 @@ impl<S: StorageExt> FantomRaftNode<S> {
                     self.peer_id, block_id
                 );
                 self.leader_state = Some(LeaderState::Building(Instant::now()));
-                self.service
+                self.raft_transport
                     .initialize_block(None)
                     .expect("Failed to initialize block");
             }
@@ -178,9 +181,9 @@ impl<S: StorageExt> FantomRaftNode<S> {
             Some(LeaderState::Building(instant)) => instant.elapsed() >= self.period,
             _ => false,
         } {
-            match self.service.summarize_block() {
+            match self.raft_transport.summarize_block() {
                 Ok(_) => {}
-                Err(Error::BlockNotReady) => {
+                Err(errors::Error::BlockNotReady) => {
                     debug!(
                         "Leader({:?}) tried to summarize block but block not ready",
                         self.peer_id
@@ -190,7 +193,7 @@ impl<S: StorageExt> FantomRaftNode<S> {
                 Err(err) => panic!("Failed to summarize block: {:?}", err),
             };
 
-            match self.service.finalize_block(vec![]) {
+            match self.raft_transport.finalize_block(vec![]) {
                 Ok(block_id) => {
                     debug!(
                         "Leader({:?}) transition to Publishing block {:?}",
@@ -198,7 +201,7 @@ impl<S: StorageExt> FantomRaftNode<S> {
                     );
                     self.leader_state = Some(LeaderState::Publishing(block_id));
                 }
-                Err(Error::BlockNotReady) => {
+                Err(errors::Error::BlockNotReady) => {
                     debug!(
                         "Leader({:?}) tried to finalize block but block not ready",
                         self.peer_id
@@ -214,9 +217,9 @@ impl<S: StorageExt> FantomRaftNode<S> {
             .write_to_bytes()
             .expect("Could not serialize RaftMessage");
         if let Some(peer_id) = self.raft_id_to_peer_id.get(&raft_msg.to) {
-            match self.service.send_to(peer_id, "", msg.to_vec()) {
+            match self.transport.send(peer_id, "", msg.to_vec()) {
                 Ok(_) => (),
-                Err(Error::UnknownPeer(s)) => {
+                Err(errors::Error::UnknownPeer(s)) => {
                     warn!("Tried to send to disconnected peer: {}", s)
                 }
                 Err(err) => panic!("Failed to send to peer: {:?}", err),
@@ -248,7 +251,7 @@ impl<S: StorageExt> FantomRaftNode<S> {
                         self.peer_id
                     );
                     self.leader_state = Some(LeaderState::Building(Instant::now()));
-                    self.service
+                    self.raft_transport
                         .initialize_block(None)
                         .expect("Failed to initialize block");
                 }
@@ -286,7 +289,7 @@ impl<S: StorageExt> FantomRaftNode<S> {
                 match self.leader_state {
                     Some(LeaderState::Building(_)) => {
                         debug!("Leader({:?}) stepped down, cancelling block", self.peer_id);
-                        self.service.cancel_block().expect("Failed to cancel block");
+                        self.raft_transport.cancel_block().expect("Failed to cancel block");
                     }
                     Some(LeaderState::Committing(ref block_id)) => {
                         self.follower_state = Some(FollowerState::Committing(block_id.clone()));
@@ -328,7 +331,7 @@ impl<S: StorageExt> FantomRaftNode<S> {
                     if let Some(LeaderState::ChangingConfig) = self.leader_state {
                         debug!("Leader({:?}) transition to Building block", self.peer_id);
                         self.leader_state = Some(LeaderState::Building(Instant::now()));
-                        self.service
+                        self.raft_transport
                             .initialize_block(None)
                             .expect("Failed to initialize block");
                     }
@@ -355,7 +358,7 @@ impl<S: StorageExt> FantomRaftNode<S> {
                 self.peer_id, block_id
             );
             self.leader_state = Some(LeaderState::Committing(block_id.clone()));
-            self.service
+            self.raft_transport
                 .commit_block(block_id.clone())
                 .expect("Failed to commit block");
         }
@@ -363,7 +366,7 @@ impl<S: StorageExt> FantomRaftNode<S> {
         if let Some(FollowerState::Idle) = self.follower_state {
             debug!("Peer({:?}) committing block {:?}", self.peer_id, block_id);
             self.follower_state = Some(FollowerState::Committing(block_id.clone()));
-            self.service
+            self.raft_transport
                 .commit_block(block_id.clone())
                 .expect("Failed to commit block");
         }
@@ -371,7 +374,7 @@ impl<S: StorageExt> FantomRaftNode<S> {
 
     fn check_for_conf_change(&mut self, block_id: BlockId) -> Option<ConfChange> {
         let settings = self
-            .service
+            .raft_transport
             .get_settings(block_id, vec![String::from("fantom.consensus.raft.peers")])
             .expect("Failed to get settings");
         let peers = get_peers_from_settings(&settings);

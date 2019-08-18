@@ -6,10 +6,6 @@ use raft::{
     Error,
 };
 
-pub mod cached_storage;
-pub mod fs_storage;
-pub mod mem_storage;
-
 pub enum StorageType {
     Cached,
     InMemory,
@@ -88,6 +84,10 @@ pub trait StorageExt: Storage {
     /// `describe` returns a `StorageType` value describing the type of storage.
     fn describe() -> StorageType;
 }
+
+pub mod cached_storage;
+pub mod fs_storage;
+pub mod mem_storage;
 
 #[cfg(test)]
 pub(crate) mod tests {

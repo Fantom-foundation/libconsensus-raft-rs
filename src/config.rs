@@ -1,15 +1,27 @@
 use std::{collections::HashMap, fmt, string::ToString, time::Duration};
 
+// use serde::{
+//     ser::{Serialize, Serializer, SerializeStruct},
+//     de::{self, Deserialize, Deserializer, Visitor, SeqAccess, MapAccess},
+// };
+
 use hex;
-use raft::Config as RaftConfig;
+use raft::{
+    self,
+    Config as RaftConfig,
+};
 use serde_json;
 
 use super::{
+    RaftConfiguration,
     path::get_path_config,
     storage::{cached_storage::CachedStorage, fs_storage::FsStorage, StorageExt},
 };
 
-use libconsensus::{BlockId, PeerId, Service};
+use libcommon_rs::{peer::PeerList, errors::Error};
+use libtransport::{Transport};
+use libconsensus::PeerId;
+use super::{BlockId};
 
 pub struct RaftEngineConfig<S: StorageExt> {
     pub peers: Vec<PeerId>,
@@ -54,11 +66,35 @@ impl<S: StorageExt> fmt::Debug for RaftEngineConfig<S> {
     }
 }
 
+pub struct RaftPeerList;
+
+impl PeerList<PeerId, Error> for RaftPeerList {
+    fn new() -> Self {
+
+    }
+
+    fn add(&mut self, peer: Self::P) -> std::result::Result<(), Error> {
+
+    }
+
+    fn get_peers_from_file(&mut self, json_peer_path: String) -> std::result::Result<(), Error> {
+
+    }
+
+    fn iter(&self) -> Iter<'_, Self::P> {
+
+    }
+
+    fn iter_mut(&mut self) -> IterMut<'_, Self::P> {
+
+    }
+}
+
 #[allow(clippy::ptr_arg, clippy::borrowed_box)]
 pub fn load_raft_config(
     peer_id: &PeerId,
     block_id: BlockId,
-    service: &mut Box<dyn Service>,
+    transport: &mut Box<dyn Transport<PeerId, RaftConfiguration, RaftPeerList, Configuration = RaftConfiguration>,
 ) -> RaftEngineConfig<impl StorageExt> {
     let mut config = RaftEngineConfig::new(create_storage());
     config.raft.id = peer_id_to_raft_id(peer_id);
@@ -71,7 +107,7 @@ pub fn load_raft_config(
         "fantom.consensus.raft.period",
     ];
 
-    let settings: HashMap<String, String> = service
+    let settings: HashMap<String, String> = raft_transport
         .get_settings(
             block_id,
             settings_keys.into_iter().map(String::from).collect(),
@@ -104,7 +140,6 @@ pub fn load_raft_config(
     let ids: Vec<u64> = peers.iter().map(peer_id_to_raft_id).collect();
 
     config.peers = peers;
-    config.raft.peers = ids;
 
     config
 }

@@ -1,18 +1,25 @@
 use std::{
-    sync::mpsc::{Receiver, RecvTimeoutError},
+    sync::mpsc::{RecvTimeoutError},
     time::Duration,
 };
 
-use raft::{raw_node::RawNode, Peer as RaftPeer};
+use raft::{
+    raw_node::RawNode,
+    Peer as RaftPeer,
+};
 
 use super::{
+    Update,
+    StartupState,
+    RaftConfiguration,
     config::{self, RaftEngineConfig},
     node::{FantomRaftNode, ReadyStatus},
     storage::StorageExt,
     ticker,
 };
 
-use libconsensus::{ConsensusEngine, Error, Service, StartupState, Update};
+use libconsensus::{Consensus, errors};
+use libtransport::{Transport};
 
 pub struct RaftEngine {}
 
@@ -24,22 +31,21 @@ impl RaftEngine {
 
 pub const RAFT_TIMEOUT: Duration = Duration::from_millis(100);
 
-impl ConsensusEngine for RaftEngine {
-    fn start(
-        &mut self,
-        updates: Receiver<Update>,
-        mut service: Box<dyn Service>,
-        startup_state: StartupState,
-    ) -> Result<(), Error> {
+impl Consensus for RaftEngine
+{
+    type Configuration = RaftConfiguration;
+
+    fn new(configuration: RaftConfiguration) -> Result<(), errors::Error> {
         let StartupState {
             chain_head,
             local_peer_info,
             ..
-        } = startup_state;
+        } = configuration.startup_state;
 
-        let cfg =
-            config::load_raft_config(&local_peer_info.peer_id, chain_head.block_id, &mut service);
+        let cfg = config::load_raft_config(&local_peer_info.peer_id, chain_head.block_id, &mut configuration.transport);
+
         info!("Raft ConsensusEngine Config Loaded: {:?}", cfg);
+
         let RaftEngineConfig {
             peers,
             period,
@@ -58,14 +64,13 @@ impl ConsensusEngine for RaftEngine {
         let raw_node = RawNode::new(&raft_config, raft_storage, raft_peers)
             .expect("Failed to create new RawNode");
 
-        let mut node =
-            FantomRaftNode::new(local_peer_info.peer_id, raw_node, service, peers, period);
+        let mut node = FantomRaftNode::new(local_peer_info.peer_id, raw_node, configuration.transport, peers, period);
 
         let mut raft_ticker = ticker::Ticker::new(RAFT_TIMEOUT);
         let mut timeout = RAFT_TIMEOUT;
 
         loop {
-            match updates.recv_timeout(timeout) {
+            match configuration.updates.recv_timeout(timeout) {
                 Err(RecvTimeoutError::Timeout) => (),
                 Err(RecvTimeoutError::Disconnected) => break,
                 Ok(update) => {
@@ -86,14 +91,6 @@ impl ConsensusEngine for RaftEngine {
         }
 
         Ok(())
-    }
-
-    fn version(&self) -> String {
-        "0.1".into()
-    }
-
-    fn name(&self) -> String {
-        "raft".into()
     }
 }
 

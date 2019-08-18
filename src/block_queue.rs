@@ -1,6 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 
-use libconsensus::{Block, BlockId};
+use super::{Block, BlockId};
 
 struct BlockStatus {
     block: Option<Block>,
