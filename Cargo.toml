@@ -5,3 +5,24 @@ authors = ["Samuel Marks <@SamuelMarks>"]
 edition = "2018"
 
 [dependencies]
+raft = {version = "0.6.0-alpha", features = ["prost-codec"], default-features = false}
+os_pipe = "0.8.1"
+serde = "1.0.98"
+uluru = "0.3.0"
+protobuf = "2.8.0"
+hex = "0.3.2"
+serde_json = "1.0.40"
+log = "0.4.8"
+log4rs = "0.8.3"
+log4rs-syslog = "3.0.3"
+uuid = { version = "0.7", features = ["serde", "v4"] }
+libcommon-rs = { git = "https://github.com/Fantom-foundation/libcommon-rs" }
+libconsensus = { git = "https://github.com/Fantom-foundation/libconsensus" }
+libtransport = { git = "https://github.com/Fantom-foundation/libtransport" }
+prost = "0.5.0"
+
+[dev-dependencies]
+tempfile = "3.1.0"
+
+[patch.crates-io]
+log4rs = { git = "https://github.com/ltseeley/log4rs", branch = "config-loading" }
