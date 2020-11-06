@@ -5,3 +5,4 @@ authors = ["Samuel Marks <@SamuelMarks>"]
 edition = "2018"
 
 [dependencies]
+raft = { git = "https://github.com/pingcap/raft-rs" }
